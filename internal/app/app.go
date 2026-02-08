@@ -371,12 +371,23 @@ func (a *App) waitForExtractedContent(ctx context.Context, client *karakeep.Clie
 	t := time.NewTicker(interval)
 	defer t.Stop()
 
+	iter := 0
 	for {
 		got, _, err := client.GetBookmark(ctx, bookmarkID)
-		if err == nil && hasExtractedContent(got.Raw) {
-			return true
-		}
-		if err != nil {
+		if err == nil {
+			ok, signals := hasExtractedContent(got.Raw)
+			iter++
+			if iter == 1 || iter%5 == 0 || ok {
+				log.Info("extract poll",
+					"bookmark_id", bookmarkID,
+					"ready", ok,
+					"signals", signals,
+				)
+			}
+			if ok {
+				return true
+			}
+		} else {
 			log.Warn("karakeep get bookmark during poll failed", "err", err)
 		}
 
@@ -391,21 +402,21 @@ func (a *App) waitForExtractedContent(ctx context.Context, client *karakeep.Clie
 	}
 }
 
-func hasExtractedContent(raw json.RawMessage) bool {
+func hasExtractedContent(raw json.RawMessage) (bool, map[string]any) {
 	if len(raw) == 0 {
-		return false
+		return false, map[string]any{"raw": "empty"}
 	}
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
-		return false
+		return false, map[string]any{"raw": "invalid_json"}
 	}
-	// Heuristics: look for any non-trivial extracted text/html fields.
-	return findNonTrivialContent(m, 0)
+	ok, sig := findNonTrivialContent(m, 0, map[string]any{})
+	return ok, sig
 }
 
-func findNonTrivialContent(v any, depth int) bool {
+func findNonTrivialContent(v any, depth int, sig map[string]any) (bool, map[string]any) {
 	if depth > 6 || v == nil {
-		return false
+		return false, sig
 	}
 	switch x := v.(type) {
 	case map[string]any:
@@ -417,26 +428,34 @@ func findNonTrivialContent(v any, depth int) bool {
 			}
 			if kl == "content" || kl == "html" || kl == "text" || kl == "textcontent" || kl == "readablecontent" || kl == "excerpt" || kl == "description" || kl == "markdown" || kl == "article" {
 				if s, ok := vv.(string); ok && len(strings.TrimSpace(s)) >= 200 {
-					return true
+					sig[k] = len(strings.TrimSpace(s))
+					return true, sig
+				}
+				// track presence even if small
+				if s, ok := vv.(string); ok {
+					sig[k] = len(strings.TrimSpace(s))
+				} else if vv != nil {
+					sig[k] = fmt.Sprintf("<%T>", vv)
 				}
 			}
-			if findNonTrivialContent(vv, depth+1) {
-				return true
+			if ok, sig2 := findNonTrivialContent(vv, depth+1, sig); ok {
+				return true, sig2
 			}
 		}
 	case []any:
 		for _, vv := range x {
-			if findNonTrivialContent(vv, depth+1) {
-				return true
+			if ok, sig2 := findNonTrivialContent(vv, depth+1, sig); ok {
+				return true, sig2
 			}
 		}
 	case string:
 		// fallback: a large string deep in payload can also count as content
 		if len(strings.TrimSpace(x)) >= 400 {
-			return true
+			sig["large_string"] = len(strings.TrimSpace(x))
+			return true, sig
 		}
 	}
-	return false
+	return false, sig
 }
 
 func (a *App) cmdStart(ctx context.Context, msg *tgbotapi.Message) {

@@ -338,8 +338,9 @@ func (c *Client) do(req *http.Request) (int, json.RawMessage, error) {
 	}
 	defer resp.Body.Close()
 
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<10)) // cap bodies to avoid Telegram MESSAGE_TOO_LONG
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// For errors, cap body to keep logs/telegram safe.
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<10))
 		preview := strings.TrimSpace(string(b))
 		if len(preview) > 600 {
 			preview = preview[:600] + "…"
@@ -387,6 +388,9 @@ func (c *Client) do(req *http.Request) (int, json.RawMessage, error) {
 
 		return resp.StatusCode, b, &APIError{StatusCode: resp.StatusCode, BodyPreview: preview}
 	}
+
+	// For success, allow larger JSON (bookmarks may include extracted content).
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2MB
 	return resp.StatusCode, b, nil
 }
 
