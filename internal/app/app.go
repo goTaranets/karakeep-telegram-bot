@@ -327,7 +327,11 @@ func userFacingKarakeepError(status int, err error) string {
 		msg += " Проверь API key (/key) и права ключа."
 		return msg
 	}
+	if status == 400 {
+		msg += " Похоже, Karakeep не принял payload. Обычно это означает неверные поля запроса (url/title/notes). Я починю формат после уточнения текста ошибки в логах."
+	}
 	if err != nil {
+		// Keep error short; APIError already contains a short preview.
 		msg += " " + strings.TrimSpace(err.Error())
 	}
 	if len(msg) > 800 {

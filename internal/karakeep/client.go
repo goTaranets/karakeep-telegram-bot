@@ -80,6 +80,9 @@ func (e *APIError) Error() string {
 	if e == nil {
 		return ""
 	}
+	if strings.TrimSpace(e.BodyPreview) != "" {
+		return fmt.Sprintf("karakeep api error: status=%d body_preview=%q", e.StatusCode, strings.TrimSpace(e.BodyPreview))
+	}
 	return fmt.Sprintf("karakeep api error: status=%d", e.StatusCode)
 }
 
