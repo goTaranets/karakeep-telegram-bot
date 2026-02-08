@@ -269,15 +269,13 @@ func (a *App) processMessageBatch(ctx context.Context, msg *tgbotapi.Message, ba
 		return
 	}
 
-	_, _, _ = client.Summarize(ctx, b.ID)
-	got, _, err := client.GetBookmark(ctx, b.ID)
-	if err == nil {
+	got, ok := a.waitForNonEmptySummary(ctx, client, b.ID, 3*time.Second, 3*time.Minute)
+	if ok {
 		final := formatFinalMessage(res.Kind, got)
 		_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, final)
 		return
 	}
-	log.Warn("karakeep get bookmark failed after summarize", "err", err)
-	_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, "✅ Сохранено.")
+	_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, "⚠️ Саммари ещё не готово. Смотрите саммари в приложении.")
 }
 
 func (a *App) editAck(chatID int64, messageID int, text string) error {
@@ -406,6 +404,13 @@ func hasExtractedContent(raw json.RawMessage) (bool, map[string]any) {
 	if len(raw) == 0 {
 		return false, map[string]any{"raw": "empty"}
 	}
+
+	// Fast path: substring checks survive even if the server returns huge JSON and we truncate it.
+	s := string(raw)
+	if strings.Contains(s, "\"crawlStatus\":\"success\"") || strings.Contains(s, "\"taggingStatus\":\"success\"") {
+		return true, map[string]any{"status": "success"}
+	}
+
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return false, map[string]any{"raw": "invalid_json"}
@@ -456,6 +461,56 @@ func findNonTrivialContent(v any, depth int, sig map[string]any) (bool, map[stri
 		}
 	}
 	return false, sig
+}
+
+func (a *App) waitForNonEmptySummary(ctx context.Context, client *karakeep.Client, bookmarkID string, interval time.Duration, timeout time.Duration) (karakeep.Bookmark, bool) {
+	log := a.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	if interval <= 0 {
+		interval = 3 * time.Second
+	}
+	if timeout <= 0 {
+		timeout = 3 * time.Minute
+	}
+
+	deadline := time.Now().Add(timeout)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+
+	iter := 0
+	for {
+		// summarize is idempotent-ish; if content isn't ready it may return empty-message summary.
+		_, _, _ = client.Summarize(ctx, bookmarkID)
+		got, _, err := client.GetBookmark(ctx, bookmarkID)
+		if err == nil {
+			s := strings.TrimSpace(got.SummaryText())
+			iter++
+			if iter == 1 || iter%5 == 0 || (s != "" && !looksEmptySummary(s)) {
+				log.Info("summary poll", "bookmark_id", bookmarkID, "len", len(s))
+			}
+			if s != "" && !looksEmptySummary(s) {
+				return got, true
+			}
+		} else {
+			log.Warn("karakeep get bookmark during summary poll failed", "err", err)
+		}
+
+		if time.Now().After(deadline) {
+			return karakeep.Bookmark{}, false
+		}
+		select {
+		case <-ctx.Done():
+			return karakeep.Bookmark{}, false
+		case <-t.C:
+		}
+	}
+}
+
+func looksEmptySummary(s string) bool {
+	s = strings.ToLower(s)
+	return strings.Contains(s, "content is empty") || strings.Contains(s, "no information to summarize")
 }
 
 func (a *App) cmdStart(ctx context.Context, msg *tgbotapi.Message) {

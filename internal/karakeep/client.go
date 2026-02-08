@@ -390,7 +390,7 @@ func (c *Client) do(req *http.Request) (int, json.RawMessage, error) {
 	}
 
 	// For success, allow larger JSON (bookmarks may include extracted content).
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2MB
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20)) // 16MB
 	return resp.StatusCode, b, nil
 }
 
