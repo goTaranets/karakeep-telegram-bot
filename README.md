@@ -53,6 +53,11 @@ TELEGRAM_WEBHOOK_SECRET=... \
 go run ./cmd/setwebhook --drop-pending=true
 ```
 
+## Деплой на сервер (nginx + Docker)
+
+Пример: поддомен `karakeep-bot.gotaranets.ru` проксирует на `127.0.0.1:8080` (контейнер).
+
+
 ## Настройка в Telegram
 
 В личке с ботом:
