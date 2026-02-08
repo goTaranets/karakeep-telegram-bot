@@ -3,6 +3,7 @@ services:
     build: .
     container_name: karakeep-telegram-bot
     restart: unless-stopped
+    user: "0:0"
     env_file:
       - ./deploy/env.docker
     ports:
