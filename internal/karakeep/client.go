@@ -19,12 +19,19 @@ type Client struct {
 	baseURL *url.URL
 	apiKey  string
 	http    *http.Client
+
+	// apiPrefix is path prefix for Karakeep API (e.g. /api/v1).
+	// We auto-detect between common prefixes on the first requests.
+	apiPrefix string
 }
 
 type ClientOpts struct {
 	BaseURL string
 	APIKey  string
 	Timeout time.Duration
+
+	// Optional. If empty, defaults to auto-detect (prefers /api/v1).
+	APIPrefix string
 }
 
 func NewClient(opts ClientOpts) (*Client, error) {
@@ -52,6 +59,7 @@ func NewClient(opts ClientOpts) (*Client, error) {
 
 	// Normalize base URL to have no path; we'll join paths below.
 	u.Path = strings.TrimSuffix(u.Path, "/")
+	u.Path = ""
 
 	return &Client{
 		baseURL: u,
@@ -59,22 +67,20 @@ func NewClient(opts ClientOpts) (*Client, error) {
 		http: &http.Client{
 			Timeout: timeout,
 		},
+		apiPrefix: pickPrefix(opts.APIPrefix),
 	}, nil
 }
 
 type APIError struct {
 	StatusCode int
-	Body       string
+	BodyPreview string
 }
 
 func (e *APIError) Error() string {
 	if e == nil {
 		return ""
 	}
-	if e.Body == "" {
-		return fmt.Sprintf("karakeep api error: status=%d", e.StatusCode)
-	}
-	return fmt.Sprintf("karakeep api error: status=%d body=%s", e.StatusCode, e.Body)
+	return fmt.Sprintf("karakeep api error: status=%d", e.StatusCode)
 }
 
 func (c *Client) CreateBookmark(ctx context.Context, urlStr string, title string, notes string) (Bookmark, int, error) {
@@ -278,7 +284,7 @@ func (c *Client) newRequest(ctx context.Context, method string, p string, body i
 	u := *c.baseURL
 	// path.Join cleans slashes; ensure p is treated as relative.
 	p = strings.TrimPrefix(p, "/")
-	u.Path = path.Join(u.Path, p)
+	u.Path = path.Join(u.Path, strings.TrimPrefix(c.apiPrefix, "/"), p)
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
 		return nil, err
@@ -295,10 +301,77 @@ func (c *Client) do(req *http.Request) (int, json.RawMessage, error) {
 	}
 	defer resp.Body.Close()
 
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20)) // cap error bodies
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<10)) // cap bodies to avoid Telegram MESSAGE_TOO_LONG
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return resp.StatusCode, b, &APIError{StatusCode: resp.StatusCode, Body: string(b)}
+		preview := strings.TrimSpace(string(b))
+		if len(preview) > 600 {
+			preview = preview[:600] + "…"
+		}
+
+		// Auto-detect API prefix on 404s: try switching between /api/v1 and /api.
+		if resp.StatusCode == http.StatusNotFound {
+			if alt, ok := c.altPrefix(); ok {
+				// Retry once with alternate prefix.
+				c.apiPrefix = alt
+				req2 := req.Clone(req.Context())
+				// rebuild URL
+				u := *c.baseURL
+				p := strings.TrimPrefix(req.URL.Path, "/")
+				// Remove previous prefix segment if present, then re-join with new prefix.
+				// Best-effort: just join new prefix with last 2 segments (bookmarks/...) if we can.
+				parts := strings.Split(p, "/")
+				// Keep tail after possible 'api' or 'api/v1'
+				start := 0
+				if len(parts) >= 1 && parts[0] == "api" {
+					start = 1
+					if len(parts) >= 2 && parts[1] == "v1" {
+						start = 2
+					}
+				}
+				tail := strings.Join(parts[start:], "/")
+				u.Path = path.Join(strings.TrimPrefix(c.apiPrefix, "/"), tail)
+				req2.URL, _ = url.Parse(u.String())
+
+				resp2, err2 := c.http.Do(req2)
+				if err2 == nil {
+					defer resp2.Body.Close()
+					b2, _ := io.ReadAll(io.LimitReader(resp2.Body, 32<<10))
+					if resp2.StatusCode >= 200 && resp2.StatusCode < 300 {
+						return resp2.StatusCode, b2, nil
+					}
+					preview2 := strings.TrimSpace(string(b2))
+					if len(preview2) > 600 {
+						preview2 = preview2[:600] + "…"
+					}
+					return resp2.StatusCode, b2, &APIError{StatusCode: resp2.StatusCode, BodyPreview: preview2}
+				}
+			}
+		}
+
+		return resp.StatusCode, b, &APIError{StatusCode: resp.StatusCode, BodyPreview: preview}
 	}
 	return resp.StatusCode, b, nil
+}
+
+func pickPrefix(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "/api/v1"
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return p
+}
+
+func (c *Client) altPrefix() (string, bool) {
+	switch c.apiPrefix {
+	case "/api/v1":
+		return "/api", true
+	case "/api":
+		return "/api/v1", true
+	default:
+		return "/api/v1", true
+	}
 }
 

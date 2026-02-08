@@ -194,7 +194,7 @@ func (a *App) processMessageBatch(ctx context.Context, msg *tgbotapi.Message, ba
 
 	if err != nil {
 		log.Warn("karakeep create failed", "status", status, "err", err)
-		_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, fmt.Sprintf("❌ Ошибка (%d): %v", status, err))
+		_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, userFacingKarakeepError(status, err))
 		return
 	}
 	log.Info("karakeep created", "bookmark_id", b.ID, "status", status)
@@ -312,6 +312,28 @@ func formatFinalMessage(kind classifier.Kind, b karakeep.Bookmark) string {
 		sb.WriteString("\n")
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+func userFacingKarakeepError(status int, err error) string {
+	// Avoid Telegram MESSAGE_TOO_LONG and avoid leaking large HTML bodies to the user.
+	msg := fmt.Sprintf("❌ Ошибка Karakeep (%d).", status)
+
+	// Common misconfig: user entered UI base url; client now auto-adds /api/v1, but still help the user.
+	if status == 404 {
+		msg += " Похоже, указан не тот адрес сервера. Укажи домен Karakeep без /api: /server https://<host>"
+		return msg
+	}
+	if status == 401 || status == 403 {
+		msg += " Проверь API key (/key) и права ключа."
+		return msg
+	}
+	if err != nil {
+		msg += " " + strings.TrimSpace(err.Error())
+	}
+	if len(msg) > 800 {
+		msg = msg[:800] + "…"
+	}
+	return msg
 }
 
 func (a *App) cmdStart(ctx context.Context, msg *tgbotapi.Message) {
