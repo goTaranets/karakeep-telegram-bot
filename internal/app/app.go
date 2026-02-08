@@ -136,6 +136,15 @@ func (a *App) processMessageBatch(ctx context.Context, msg *tgbotapi.Message, ba
 
 	res := classifier.ClassifyMessage(msg)
 	attachments := ExtractAttachments(batch)
+	log.Info("processing message",
+		"user_id", msg.From.ID,
+		"chat_id", msg.Chat.ID,
+		"message_id", msg.MessageID,
+		"kind", res.Kind,
+		"urls_count", len(res.URLs),
+		"has_media", res.HasMedia,
+		"attachments_count", len(attachments),
+	)
 
 	ackText := ""
 	switch res.Kind {
@@ -184,9 +193,11 @@ func (a *App) processMessageBatch(ctx context.Context, msg *tgbotapi.Message, ba
 	}
 
 	if err != nil {
+		log.Warn("karakeep create failed", "status", status, "err", err)
 		_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, fmt.Sprintf("❌ Ошибка (%d): %v", status, err))
 		return
 	}
+	log.Info("karakeep created", "bookmark_id", b.ID, "status", status)
 
 	// Upload + attach assets (if any)
 	if b.ID != "" && len(attachments) > 0 {
@@ -204,6 +215,7 @@ func (a *App) processMessageBatch(ctx context.Context, msg *tgbotapi.Message, ba
 			}
 			data, filePath, err := a.Downloader.DownloadFileByID(ctx, att.FileID, maxBytes)
 			if err != nil {
+				log.Warn("telegram download failed", "err", err)
 				_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, "❌ Ошибка скачивания файла из Telegram: "+err.Error())
 				return
 			}
@@ -217,15 +229,18 @@ func (a *App) processMessageBatch(ctx context.Context, msg *tgbotapi.Message, ba
 			}
 			asset, st, err := client.UploadAsset(ctx, data, filename, att.Mime)
 			if err != nil {
+				log.Warn("karakeep upload asset failed", "status", st, "err", err)
 				_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, fmt.Sprintf("❌ Ошибка загрузки в Karakeep (%d): %v", st, err))
 				return
 			}
 			if strings.TrimSpace(asset.ID) == "" {
+				log.Warn("karakeep upload asset returned empty id")
 				_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, "❌ Karakeep вернул asset без id (проверьте схему Upload a new asset).")
 				return
 			}
 			_, st, err = client.AttachAsset(ctx, b.ID, asset.ID)
 			if err != nil {
+				log.Warn("karakeep attach asset failed", "status", st, "err", err)
 				_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, fmt.Sprintf("❌ Ошибка attach asset (%d): %v", st, err))
 				return
 			}
@@ -245,6 +260,7 @@ func (a *App) processMessageBatch(ctx context.Context, msg *tgbotapi.Message, ba
 			_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, final)
 			return
 		}
+		log.Warn("karakeep get bookmark failed after summarize", "err", err)
 	}
 
 	_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, "✅ Сохранено.")
@@ -253,6 +269,13 @@ func (a *App) processMessageBatch(ctx context.Context, msg *tgbotapi.Message, ba
 func (a *App) editAck(chatID int64, messageID int, text string) error {
 	edit := tgbotapi.NewEditMessageText(chatID, messageID, text)
 	_, err := a.Bot.Send(edit)
+	if err != nil {
+		log := a.Logger
+		if log == nil {
+			log = slog.Default()
+		}
+		log.Warn("failed to edit ack", "chat_id", chatID, "message_id", messageID, "err", err)
+	}
 	return err
 }
 

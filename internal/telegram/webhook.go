@@ -36,6 +36,7 @@ func NewWebhookHandler(opts WebhookHandlerOpts) http.Handler {
 		if opts.SecretToken != "" {
 			got := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
 			if got != opts.SecretToken {
+				log.Warn("telegram webhook unauthorized", "remote", r.RemoteAddr)
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
@@ -65,6 +66,11 @@ func NewWebhookHandler(opts WebhookHandlerOpts) http.Handler {
 						log.Error("panic in update handler", "recover", r)
 					}
 				}()
+				if u.UpdateID != 0 {
+					log.Info("telegram update received", "update_id", u.UpdateID)
+				} else {
+					log.Info("telegram update received")
+				}
 				opts.OnUpdate(context.Background(), u)
 			}(upd)
 		}
