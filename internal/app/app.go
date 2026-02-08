@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -248,20 +249,34 @@ func (a *App) processMessageBatch(ctx context.Context, msg *tgbotapi.Message, ba
 
 	_ = a.Store.SetLastSuccess(ctx, msg.From.ID, b.ID)
 
-	_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, fmt.Sprintf("✅ Сохранено (id=%s). Обогащаю…", b.ID))
+	_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, fmt.Sprintf("✅ Сохранено (id=%s). Жду загрузку контента…", b.ID))
 
-	// Enrichment: summarize + get bookmark for title/summary/tags, then edit message.
-	if b.ID != "" {
-		_, _, _ = client.Summarize(ctx, b.ID)
-		got, _, err := client.GetBookmark(ctx, b.ID)
-		if err == nil {
-			final := formatFinalMessage(res.Kind, got)
-			_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, final)
-			return
-		}
-		log.Warn("karakeep get bookmark failed after summarize", "err", err)
+	// Enrichment:
+	// - For link bookmarks: poll until Karakeep extracted content, then summarize.
+	// - For text notes: summarize immediately.
+	if b.ID == "" {
+		_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, "✅ Сохранено.")
+		return
 	}
 
+	ready := true
+	if res.Kind == classifier.KindBookmark {
+		ready = a.waitForExtractedContent(ctx, client, b.ID, 3*time.Second, 3*time.Minute)
+	}
+
+	if !ready {
+		_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, "⚠️ Контент не загрузился за 3 минуты. Смотрите саммари в приложении.")
+		return
+	}
+
+	_, _, _ = client.Summarize(ctx, b.ID)
+	got, _, err := client.GetBookmark(ctx, b.ID)
+	if err == nil {
+		final := formatFinalMessage(res.Kind, got)
+		_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, final)
+		return
+	}
+	log.Warn("karakeep get bookmark failed after summarize", "err", err)
 	_ = a.editAck(msg.Chat.ID, ackMsg.MessageID, "✅ Сохранено.")
 }
 
@@ -337,6 +352,91 @@ func userFacingKarakeepError(status int, err error) string {
 		msg = msg[:800] + "…"
 	}
 	return msg
+}
+
+func (a *App) waitForExtractedContent(ctx context.Context, client *karakeep.Client, bookmarkID string, interval time.Duration, timeout time.Duration) bool {
+	log := a.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+
+	if interval <= 0 {
+		interval = 3 * time.Second
+	}
+	if timeout <= 0 {
+		timeout = 3 * time.Minute
+	}
+
+	deadline := time.Now().Add(timeout)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+
+	for {
+		got, _, err := client.GetBookmark(ctx, bookmarkID)
+		if err == nil && hasExtractedContent(got.Raw) {
+			return true
+		}
+		if err != nil {
+			log.Warn("karakeep get bookmark during poll failed", "err", err)
+		}
+
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+		}
+	}
+}
+
+func hasExtractedContent(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return false
+	}
+	// Heuristics: look for any non-trivial extracted text/html fields.
+	return findNonTrivialContent(m, 0)
+}
+
+func findNonTrivialContent(v any, depth int) bool {
+	if depth > 6 || v == nil {
+		return false
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		for k, vv := range x {
+			kl := strings.ToLower(k)
+			if kl == "notes" || kl == "note" || kl == "summary" {
+				// not a signal of extracted page content
+				continue
+			}
+			if kl == "content" || kl == "html" || kl == "text" || kl == "textcontent" || kl == "readablecontent" || kl == "excerpt" || kl == "description" || kl == "markdown" || kl == "article" {
+				if s, ok := vv.(string); ok && len(strings.TrimSpace(s)) >= 200 {
+					return true
+				}
+			}
+			if findNonTrivialContent(vv, depth+1) {
+				return true
+			}
+		}
+	case []any:
+		for _, vv := range x {
+			if findNonTrivialContent(vv, depth+1) {
+				return true
+			}
+		}
+	case string:
+		// fallback: a large string deep in payload can also count as content
+		if len(strings.TrimSpace(x)) >= 400 {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) cmdStart(ctx context.Context, msg *tgbotapi.Message) {
