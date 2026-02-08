@@ -87,19 +87,53 @@ func (e *APIError) Error() string {
 }
 
 func (c *Client) CreateBookmark(ctx context.Context, urlStr string, title string, notes string) (Bookmark, int, error) {
-	// Official doc page: POST /bookmarks
-	// https://docs.karakeep.app/api/create-a-new-bookmark
-	body := map[string]any{}
-	if strings.TrimSpace(urlStr) != "" {
-		body["url"] = urlStr
-	}
-	if strings.TrimSpace(title) != "" {
-		body["title"] = title
-	}
-	if strings.TrimSpace(notes) != "" {
-		body["notes"] = notes
+	// NOTE: There are 2 Karakeep API shapes in the wild:
+	// - docs.karakeep.app shows POST /bookmarks with {url, title?, notes?}
+	// - some deployments (incl. yours) require a discriminated union with {type: "link"|"text"|"asset", ...}
+	//
+	// We implement the union form here, since the server returns ZodError expecting `type`.
+	//
+	// Link bookmark:
+	//   { "type": "link", "url": "https://..." , "title"?: "..." }
+	// Text note:
+	//   { "type": "text", "text": "..." }
+	//
+	// For link extra text, we create link first then PATCH notes (best-effort).
+	urlStr = strings.TrimSpace(urlStr)
+	title = strings.TrimSpace(title)
+	notes = strings.TrimSpace(notes)
+
+	if urlStr != "" {
+		body := map[string]any{
+			"type": "link",
+			"url":  urlStr,
+		}
+		if title != "" {
+			body["title"] = title
+		}
+
+		var out Bookmark
+		status, raw, err := c.doJSON(ctx, http.MethodPost, "/bookmarks", body, &out)
+		if err != nil {
+			return Bookmark{}, status, err
+		}
+		out.Raw = raw
+
+		// Best-effort: attach notes after creation (field name may differ; try "notes" then "note").
+		if out.ID != "" && notes != "" {
+			_, _, _ = c.UpdateBookmark(ctx, out.ID, map[string]any{"notes": notes})
+		}
+		return out, status, nil
 	}
 
+	// Text note (no URL)
+	body := map[string]any{
+		"type": "text",
+		"text": notes,
+	}
+	if title != "" {
+		body["title"] = title
+	}
 	var out Bookmark
 	status, raw, err := c.doJSON(ctx, http.MethodPost, "/bookmarks", body, &out)
 	if err != nil {

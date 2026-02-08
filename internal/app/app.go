@@ -181,8 +181,7 @@ func (a *App) processMessageBatch(ctx context.Context, msg *tgbotapi.Message, ba
 	case classifier.KindBookmark:
 		b, status, err = client.CreateBookmark(ctx, res.URL, "", res.Notes)
 	case classifier.KindNote:
-		// Prefer true "note" semantics: create bookmark without url, store text as notes.
-		// If API rejects url-less bookmarks, fallback to first URL (if any).
+		// Text note: create text-type bookmark. If text contains URLs and server requires link-type, fallback to first URL.
 		b, status, err = client.CreateBookmark(ctx, "", "", res.Text)
 		if err != nil && len(res.URLs) > 0 {
 			b, status, err = client.CreateBookmark(ctx, res.URLs[0], "", res.Text)
