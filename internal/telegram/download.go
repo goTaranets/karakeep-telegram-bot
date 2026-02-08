@@ -44,7 +44,10 @@ func (d *Downloader) DownloadFileByID(ctx context.Context, fileID string, maxByt
 	}
 
 	// tgbotapi provides direct URL (contains bot token); do not log it.
-	urlStr := d.Bot.GetFileDirectURL(f.FilePath)
+	urlStr, err := d.Bot.GetFileDirectURL(f.FilePath)
+	if err != nil {
+		return nil, f.FilePath, fmt.Errorf("get direct url: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
