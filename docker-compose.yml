@@ -1,0 +1,15 @@
+services:
+  karakeep-telegram-bot:
+    build: .
+    container_name: karakeep-telegram-bot
+    restart: unless-stopped
+    env_file:
+      - ./deploy/env.docker
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - karakeep_bot_data:/var/lib/karakeep-telegram-bot
+
+volumes:
+  karakeep_bot_data:
+

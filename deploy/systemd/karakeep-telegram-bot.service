@@ -1,0 +1,25 @@
+[Unit]
+Description=Karakeep Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=karakeep-bot
+Group=karakeep-bot
+EnvironmentFile=/etc/karakeep-telegram-bot/env
+WorkingDirectory=/opt/karakeep-telegram-bot
+ExecStart=/opt/karakeep-telegram-bot/karakeep-telegram-bot
+Restart=always
+RestartSec=2
+
+# Hardening (baseline)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/karakeep-telegram-bot
+
+[Install]
+WantedBy=multi-user.target
+

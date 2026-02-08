@@ -1,0 +1,9 @@
+.git
+.cursor
+data
+deploy
+*.sqlite
+*.db
+*.log
+**/*_test.go
+

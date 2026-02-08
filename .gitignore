@@ -1,0 +1,13 @@
+/data/
+*.sqlite
+*.db
+*.log
+
+# Cursor/agent local files
+.claude/
+
+# local env files (DO NOT COMMIT REAL SECRETS)
+deploy/env
+deploy/env.docker
+deploy/*.env
+
