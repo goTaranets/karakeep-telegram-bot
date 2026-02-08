@@ -2,6 +2,9 @@ FROM golang:1.22 AS build
 
 WORKDIR /src
 
+# Allow go commands inside the build to update go.sum as needed.
+ENV GOFLAGS=-mod=mod
+
 COPY go.mod ./
 RUN go mod download
 
