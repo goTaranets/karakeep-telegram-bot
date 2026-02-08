@@ -114,9 +114,6 @@ func ExtractAttachments(msgs []*tgbotapi.Message) []Attachment {
 			if msg.Sticker.IsAnimated {
 				ext = "tgs"
 			}
-			if msg.Sticker.IsVideo {
-				ext = "webm"
-			}
 			add(Attachment{
 				FileID:    msg.Sticker.FileID,
 				Filename:  fmt.Sprintf("sticker.%s", ext),
